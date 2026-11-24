@@ -861,23 +861,23 @@
         exchange: 'NASDAQ',
         name: 'Micron Technology, Inc.',
         currency: 'USD',
-        price: 104.50,
-        changePercent: 1.18,
-        operatingCashFlow: 8064000000,
-        capitalExpenditures: 8120000000,
-        startingFCF: -56000000,
-        sbc: 820000000,
-        cashAndSTInv: 9240000000,
-        totalDebt: 13290000000,
-        sharesOutstanding: 1110000000,
-        source: 'Sample Preset',
+        price: 707.70,
+        changePercent: 2.10,
+        operatingCashFlow: 89680000000,
+        capitalExpenditures: 27370000000,
+        startingFCF: 62310000000,
+        sbc: 1200000000,
+        cashAndSTInv: 73500000000,
+        totalDebt: 4700000000,
+        sharesOutstanding: 1120000000,
+        source: 'FY26 Preset',
         updatedAt: Date.now()
       }
     };
 
     const STORAGE_KEYS = {
       API_KEY: 'intrinsicgauge_av_api_key',
-      CACHE: 'intrinsicgauge_ticker_cache_v2',
+      CACHE: 'intrinsicgauge_ticker_cache_v3',
       WATCHLIST: 'intrinsicgauge_watchlist_5_v1',
       LAST_TICKER: 'intrinsicgauge_last_ticker_v1'
     };
@@ -904,6 +904,11 @@
     // 4. INITIALIZATION
     // -------------------------------------------------------------------------
     window.addEventListener('DOMContentLoaded', () => {
+      try {
+        localStorage.removeItem('intrinsicgauge_ticker_cache_v1');
+        localStorage.removeItem('intrinsicgauge_ticker_cache_v2');
+      } catch (e) {}
+
       initWatchlist();
       updateApiStatusIndicator();
 
@@ -1094,13 +1099,17 @@
 
       if (!forceRefresh) {
         const cached = getCachedCompany(querySymbol);
-        if (cached && (Date.now() - cached.updatedAt < 12 * 60 * 60 * 1000)) {
+        if (cached && cached.source === 'Alpha Vantage Live' && (Date.now() - cached.updatedAt < 12 * 60 * 60 * 1000)) {
           return cached;
         }
       }
 
       const cleanKey = (appState.apiKey || '').trim();
       if (!cleanKey) {
+        if (!forceRefresh) {
+          const cached = getCachedCompany(querySymbol);
+          if (cached) return cached;
+        }
         if (DEMO_DATABASE[querySymbol]) {
           return { ...DEMO_DATABASE[querySymbol], updatedAt: Date.now() };
         }
@@ -1126,52 +1135,84 @@
         }
 
         const quote = quoteRes['Global Quote'] || {};
-        const price = parseFloat(quote['05. price']);
-        const changePercent = parseFloat(String(quote['10. change percent'] || '0').replace('%', '')) || 0;
+        let price = parseFloat(quote['05. price']);
+        let changePercent = parseFloat(String(quote['10. change percent'] || '0').replace('%', ''));
+        if (isNaN(changePercent)) changePercent = 0;
 
         if (!price || isNaN(price) || price <= 0) {
           throw new Error(`No live quote returned for "${querySymbol}".`);
         }
 
-        const annualCF = (cashFlowRes.annualReports && cashFlowRes.annualReports[0]) || {};
-        const quarterlyCF = (cashFlowRes.quarterlyReports && cashFlowRes.quarterlyReports.slice(0, 4)) || [];
+        const annualCF = Array.isArray(cashFlowRes.annualReports) && cashFlowRes.annualReports.length > 0
+          ? cashFlowRes.annualReports[0]
+          : {};
+        const quarterlyCF = Array.isArray(cashFlowRes.quarterlyReports)
+          ? cashFlowRes.quarterlyReports.slice(0, 4)
+          : [];
 
-        let ocf = parseFloat(annualCF.operatingCashflow);
-        let capex = Math.abs(parseFloat(annualCF.capitalExpenditures));
-        let sbc = parseFloat(annualCF.stockBasedCompensation);
+        const parseNum = (v) => {
+          if (v === undefined || v === null || v === '' || v === 'None') return NaN;
+          const n = parseFloat(String(v).replace(/,/g, ''));
+          return isNaN(n) ? NaN : n;
+        };
+
+        let ocf = parseNum(annualCF.operatingCashflow);
+        let capex = Math.abs(parseNum(annualCF.capitalExpenditures));
+        let sbc = parseNum(annualCF.stockBasedCompensation);
 
         if (isNaN(ocf) && quarterlyCF.length > 0) {
-          ocf = quarterlyCF.reduce((acc, q) => acc + (parseFloat(q.operatingCashflow) || 0), 0);
+          ocf = quarterlyCF.reduce((acc, q) => acc + (parseNum(q.operatingCashflow) || 0), 0);
         }
         if (isNaN(capex) && quarterlyCF.length > 0) {
-          capex = quarterlyCF.reduce((acc, q) => acc + Math.abs(parseFloat(q.capitalExpenditures) || 0), 0);
+          capex = quarterlyCF.reduce((acc, q) => {
+            const c = parseNum(q.capitalExpenditures);
+            return acc + (isNaN(c) ? 0 : Math.abs(c));
+          }, 0);
         }
         if (isNaN(sbc)) {
-          sbc = quarterlyCF.reduce((acc, q) => acc + (parseFloat(q.stockBasedCompensation) || 0), 0) || 0;
+          const qSbc = quarterlyCF.reduce((acc, q) => acc + (parseNum(q.stockBasedCompensation) || 0), 0);
+          sbc = qSbc || 0;
         }
 
         ocf = isNaN(ocf) ? 0 : ocf;
         capex = isNaN(capex) ? 0 : capex;
         const startingFCF = ocf - capex;
 
-        const latestBS = (balanceRes.quarterlyReports && balanceRes.quarterlyReports[0]) ||
-                         (balanceRes.annualReports && balanceRes.annualReports[0]) || {};
+        const latestBS = (Array.isArray(balanceRes.quarterlyReports) && balanceRes.quarterlyReports.length > 0)
+          ? balanceRes.quarterlyReports[0]
+          : ((Array.isArray(balanceRes.annualReports) && balanceRes.annualReports.length > 0)
+              ? balanceRes.annualReports[0]
+              : {});
 
-        let cashAndSTInv = parseFloat(latestBS.cashAndShortTermInvestments);
+        let cashAndSTInv = parseNum(latestBS.cashAndShortTermInvestments);
         if (isNaN(cashAndSTInv)) {
-          cashAndSTInv = parseFloat(latestBS.cashAndCashEquivalentsAtCarryingValue) || 0;
+          const cashOnly = parseNum(latestBS.cashAndCashEquivalentsAtCarryingValue);
+          const stInv = parseNum(latestBS.shortTermInvestments);
+          if (!isNaN(cashOnly) || !isNaN(stInv)) {
+            cashAndSTInv = (cashOnly || 0) + (stInv || 0);
+          } else {
+            cashAndSTInv = 0;
+          }
         }
 
-        let totalDebt = parseFloat(latestBS.shortLongTermDebtTotal);
+        let totalDebt = parseNum(latestBS.shortLongTermDebtTotal);
         if (isNaN(totalDebt)) {
-          const stDebt = parseFloat(latestBS.shortTermDebt) || 0;
-          const ltDebt = parseFloat(latestBS.longTermDebt) || 0;
-          totalDebt = stDebt + ltDebt;
+          const stDebt = parseNum(latestBS.shortTermDebt);
+          const ltDebt = parseNum(latestBS.longTermDebt);
+          const currLtDebt = parseNum(latestBS.currentLongTermDebt);
+          if (!isNaN(stDebt) || !isNaN(ltDebt) || !isNaN(currLtDebt)) {
+            totalDebt = (stDebt || 0) + (ltDebt || 0) + (currLtDebt || 0);
+          } else {
+            totalDebt = 0;
+          }
         }
 
-        let shares = parseFloat(overviewRes.SharesOutstanding);
+        let shares = parseNum(overviewRes.SharesOutstanding);
         if (isNaN(shares) || shares <= 0) {
-          shares = parseFloat(latestBS.commonStockSharesOutstanding) || 1;
+          shares = parseNum(latestBS.commonStockSharesOutstanding);
+        }
+        if (isNaN(shares) || shares <= 0) {
+          shares = 1;
         }
 
         const companyData = {
@@ -1197,10 +1238,14 @@
 
       } catch (err) {
         console.error('Alpha Vantage Fetch Error:', err);
-        const fallback = getCachedCompany(querySymbol) || (DEMO_DATABASE[querySymbol] ? { ...DEMO_DATABASE[querySymbol], updatedAt: Date.now() } : null);
-        if (fallback) {
-          showToast(`${err.message} Loaded fallback data for ${querySymbol}.`, 'warning');
-          return fallback;
+        const cachedFallback = getCachedCompany(querySymbol);
+        if (cachedFallback) {
+          showToast(`${err.message} Using cached data for ${querySymbol}.`, 'warning');
+          return cachedFallback;
+        }
+        if (DEMO_DATABASE[querySymbol]) {
+          showToast(`${err.message} Using fallback preset for ${querySymbol}.`, 'warning');
+          return { ...DEMO_DATABASE[querySymbol], updatedAt: Date.now() };
         }
         showToast(err.message || `Failed to fetch live ticker data for ${querySymbol}.`, 'error');
         return null;
