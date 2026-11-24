@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>FairValue • Automated DCF Valuation</title>
+  <title>IntrinsicGauge • Automated DCF Valuation</title>
 
   <!-- PWA & Mobile Standalone App Meta Tags -->
   <meta name="theme-color" content="#06070a" />
@@ -191,7 +191,9 @@
               id="ticker-input"
               type="text"
               autocapitalize="characters"
-              placeholder="Ticker B2 (e.g. NVDA, LON:VOD)..."
+              autocorrect="off"
+              spellcheck="false"
+              placeholder="Ticker B2 (e.g. NVDA, MU, LON:VOD)..."
               class="w-full bg-surface border border-borderSubtle focus:border-revolutBlue rounded-xl pl-8 pr-8 py-1.5 text-xs font-bold uppercase text-white placeholder-zinc-500 outline-none transition"
             />
             <button id="clear-ticker-btn" type="button" onclick="clearTickerInput()" class="hidden absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs px-1">
@@ -521,12 +523,20 @@
           </div>
 
           <!-- IntrinsicGauge Valuation Export & Share Bar -->
-            Share Summary
-          </button>
+          <div class="grid grid-cols-3 gap-2 pt-1">
+            <button onclick="exportValuationJson()" class="py-2 px-2.5 rounded-xl bg-surfaceElevated border border-borderSubtle hover:border-zinc-600 active:scale-95 text-[11px] font-semibold text-zinc-200 transition">
+              Export JSON
+            </button>
+            <button onclick="exportValuationCsv()" class="py-2 px-2.5 rounded-xl bg-surfaceElevated border border-borderSubtle hover:border-zinc-600 active:scale-95 text-[11px] font-semibold text-zinc-200 transition">
+              Export CSV
+            </button>
+            <button onclick="shareValuationSummary()" class="py-2 px-2.5 rounded-xl bg-revolutBlue/15 border border-revolutBlue/30 hover:bg-revolutBlue/25 active:scale-95 text-[11px] font-semibold text-revolutBlue transition">
+              Share Summary
+            </button>
+          </div>
         </div>
-      </div>
-    </section>
-  </main>
+      </section>
+    </main>
 
     <!-- ===================================================================== -->
     <!-- TAB 2: TRACKED 5 COMPANIES VIEW (Column I–O Watchlist Grid)           -->
@@ -760,11 +770,6 @@
     // -------------------------------------------------------------------------
     // 2. EXACT SPREADSHEET BASELINE DATA & DEMO PRESETS
     // -------------------------------------------------------------------------
-    // Exact NVIDIA numbers from user's spreadsheet:
-    // OCF = $102.718B, CapEx = $6.042B, Starting FCF = $96.676B, SBC = $6.386B,
-    // Cash & ST Inv = $29.089B, Total Debt = $38.148B, Shares = 24.186B, Price = $152.83
-    // At Growth=27.0%, WACC=9.0%, Perp=2.5%, DeductSBC=Yes, MoS=10.0%:
-    // -> Intrinsic Value = $167.33, Target Buy = $150.60
     const DEMO_DATABASE = {
       NVDA: {
         symbol: 'NVDA',
@@ -850,12 +855,29 @@
         sharesOutstanding: 4670000000,
         source: 'Sample Preset',
         updatedAt: Date.now()
+      },
+      MU: {
+        symbol: 'MU',
+        exchange: 'NASDAQ',
+        name: 'Micron Technology, Inc.',
+        currency: 'USD',
+        price: 104.50,
+        changePercent: 1.18,
+        operatingCashFlow: 8064000000,
+        capitalExpenditures: 8120000000,
+        startingFCF: -56000000,
+        sbc: 820000000,
+        cashAndSTInv: 9240000000,
+        totalDebt: 13290000000,
+        sharesOutstanding: 1110000000,
+        source: 'Sample Preset',
+        updatedAt: Date.now()
       }
     };
 
     const STORAGE_KEYS = {
       API_KEY: 'intrinsicgauge_av_api_key',
-      CACHE: 'intrinsicgauge_ticker_cache_v1',
+      CACHE: 'intrinsicgauge_ticker_cache_v2',
       WATCHLIST: 'intrinsicgauge_watchlist_5_v1',
       LAST_TICKER: 'intrinsicgauge_last_ticker_v1'
     };
@@ -868,11 +890,11 @@
       apiKey: localStorage.getItem(STORAGE_KEYS.API_KEY) || '',
       currentCompany: null,
       assumptions: {
-        deductSBC: true,   // B17 (Spreadsheet B14)
-        mos: 10.0,         // B11 (Spreadsheet B39)
-        growth: 27.0,      // B19 (Spreadsheet B16)
-        wacc: 9.0,         // B20 (Spreadsheet B17)
-        perp: 2.5          // B21 (Spreadsheet B18)
+        deductSBC: true,
+        mos: 10.0,
+        growth: 27.0,
+        wacc: 9.0,
+        perp: 2.5
       },
       watchlist: [],
       isFetching: false
@@ -891,7 +913,6 @@
         clearBtn.classList.toggle('hidden', tickerInput.value.trim().length === 0);
       });
 
-      // Load NVDA baseline immediately on launch so user sees live interactive numbers
       appState.currentCompany = { ...DEMO_DATABASE.NVDA };
       renderAnalyzer();
       renderWatchlist();
@@ -908,7 +929,6 @@
         console.warn('Could not parse saved watchlist:', e);
       }
 
-      // Default 5 tracked slots (matching user's Column I-O concept)
       appState.watchlist = [
         { ticker: 'NVDA', growth: 27.0, wacc: 9.0, perp: 2.5, mos: 10.0, deductSBC: true },
         { ticker: 'AAPL', growth: 9.0,  wacc: 8.5, perp: 2.5, mos: 10.0, deductSBC: true },
@@ -924,7 +944,7 @@
     }
 
     // -------------------------------------------------------------------------
-    // 5. CORE DCF VALUATION ENGINE (Exact Spreadsheet Mathematical Parity)
+    // 5. CORE DCF VALUATION ENGINE
     // -------------------------------------------------------------------------
     function calculateDCF(company, assumptions) {
       if (!company) return null;
@@ -938,12 +958,10 @@
       const gPerp = (Number(assumptions.perp) || 0) / 100;
       const mos = (Number(assumptions.mos) || 0) / 100;
 
-      // Guardrail: WACC must exceed Perpetual Growth Rate by at least 0.5% for Gordon Growth validity
       if (wacc <= gPerp + 0.005) {
         wacc = gPerp + 0.005;
       }
 
-      // 5-Year FCF Projections & Present Values
       const projections = [];
       let pv5YrSum = 0;
       let fcfYear5 = adjustedFCF;
@@ -962,29 +980,22 @@
         });
       }
 
-      // Gordon Growth Terminal Value at Year 5 discounted back to Today
       const terminalValueYr5 = (fcfYear5 * (1 + gPerp)) / (wacc - gPerp);
       const pvTerminalValue = terminalValueYr5 / Math.pow(1 + wacc, 5);
-
-      // Value of Operations (Enterprise Value)
       const valueOfOperations = pv5YrSum + pvTerminalValue;
 
-      // Equity Value Bridge: + Cash & ST Inv - Total Debt
       const cash = Number(company.cashAndSTInv) || 0;
       const debt = Number(company.totalDebt) || 0;
       const equityValue = valueOfOperations + cash - debt;
 
-      // Per Share Metrics
       const shares = Math.max(Number(company.sharesOutstanding) || 1, 1);
       const intrinsicValue = equityValue / shares;
       const targetBuyPrice = intrinsicValue * (1 - mos);
       const currentPrice = Number(company.price) || 0;
 
-      // Upside / Downside (Cell D10): ((Intrinsic - Current) / Current) * 100%
       const upsidePct = currentPrice > 0 ? ((intrinsicValue - currentPrice) / currentPrice) * 100 : 0;
       const upsideDollar = intrinsicValue - currentPrice;
 
-      // Current Price vs Fair Market Price (Cell E10)
       const priceVsFmpPct = intrinsicValue !== 0 ? (currentPrice / intrinsicValue) * 100 : 0;
       const fmpSpreadPct = intrinsicValue !== 0 ? ((currentPrice - intrinsicValue) / intrinsicValue) * 100 : 0;
 
@@ -1015,17 +1026,15 @@
     // 6. TICKER NORMALIZATION & ALPHA VANTAGE LIVE DATA PIPELINE
     // -------------------------------------------------------------------------
     function normalizeTicker(rawInput) {
-      let cleaned = (rawInput || '').trim().toUpperCase();
-      let displayExchange = 'GLOBAL';
+      let cleaned = String(rawInput || '').trim().toUpperCase().replace(/\s+/g, '');
+      let displayExchange = 'NASDAQ';
 
-      // Handle prefixes like NASDAQ:NVDA, NYSE:AAPL, LON:VOD, TSE:RY
       if (cleaned.includes(':')) {
         const parts = cleaned.split(':');
-        const prefix = parts[0].trim();
-        const code = parts[1].trim();
-        displayExchange = prefix;
+        const prefix = (parts[0] || '').trim();
+        const code = (parts[1] || '').trim();
+        displayExchange = prefix || 'NASDAQ';
 
-        // Strip US exchange prefixes for Alpha Vantage compatibility, map common international ones
         if (['NASDAQ', 'NYSE', 'AMEX', 'BATS', 'ARCA', 'US'].includes(prefix)) {
           cleaned = code;
         } else if (prefix === 'LON' || prefix === 'LSE') {
@@ -1038,8 +1047,8 @@
           cleaned = code;
         }
       } else if (cleaned.includes('.')) {
-        const suffix = cleaned.split('.')[1];
-        displayExchange = suffix;
+        const suffix = (cleaned.split('.')[1] || '').trim();
+        displayExchange = suffix || 'GLOBAL';
       }
 
       return { querySymbol: cleaned, displayExchange };
@@ -1048,7 +1057,11 @@
     function getCachedCompany(symbol) {
       try {
         const cache = JSON.parse(localStorage.getItem(STORAGE_KEYS.CACHE) || '{}');
-        return cache[symbol] || null;
+        const item = cache[symbol];
+        if (!item || typeof item.price !== 'number' || isNaN(item.price) || item.price <= 0) {
+          return null;
+        }
+        return item;
       } catch (e) {
         return null;
       }
@@ -1056,6 +1069,9 @@
 
     function setCachedCompany(symbol, data) {
       try {
+        if (!data || typeof data.price !== 'number' || isNaN(data.price) || data.price <= 0) {
+          return;
+        }
         const cache = JSON.parse(localStorage.getItem(STORAGE_KEYS.CACHE) || '{}');
         cache[symbol] = data;
         localStorage.setItem(STORAGE_KEYS.CACHE, JSON.stringify(cache));
@@ -1064,11 +1080,18 @@
       }
     }
 
+    async function safeFetchJson(url) {
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) {
+        throw new Error(`Network response error (${resp.status})`);
+      }
+      return resp.json();
+    }
+
     async function fetchCompanyData(rawSymbol, forceRefresh = false) {
       const { querySymbol, displayExchange } = normalizeTicker(rawSymbol);
       if (!querySymbol) return null;
 
-      // 1. Check localStorage cache first (valid for 12 hours unless forced)
       if (!forceRefresh) {
         const cached = getCachedCompany(querySymbol);
         if (cached && (Date.now() - cached.updatedAt < 12 * 60 * 60 * 1000)) {
@@ -1076,44 +1099,40 @@
         }
       }
 
-      // 2. If no Alpha Vantage API key is set, check demo/preset fallback
-      if (!appState.apiKey) {
+      const cleanKey = (appState.apiKey || '').trim();
+      if (!cleanKey) {
         if (DEMO_DATABASE[querySymbol]) {
-          return { ...DEMO_DATABASE[querySymbol] };
+          return { ...DEMO_DATABASE[querySymbol], updatedAt: Date.now() };
         }
         showToast('Enter an Alpha Vantage API key in Settings to fetch live global tickers.', 'warning');
         return null;
       }
 
-      // 3. Fetch live from Alpha Vantage endpoints
-      const key = encodeURIComponent(appState.apiKey.trim());
+      const key = encodeURIComponent(cleanKey);
       const sym = encodeURIComponent(querySymbol);
       const baseUrl = 'https://www.alphavantage.co/query';
 
       try {
-        // Fetch Global Quote, Overview, Cash Flow, and Balance Sheet in parallel
         const [quoteRes, overviewRes, cashFlowRes, balanceRes] = await Promise.all([
-          fetch(`${baseUrl}?function=GLOBAL_QUOTE&symbol=${sym}&apikey=${key}`).then(r => r.json()),
-          fetch(`${baseUrl}?function=OVERVIEW&symbol=${sym}&apikey=${key}`).then(r => r.json()),
-          fetch(`${baseUrl}?function=CASH_FLOW&symbol=${sym}&apikey=${key}`).then(r => r.json()),
-          fetch(`${baseUrl}?function=BALANCE_SHEET&symbol=${sym}&apikey=${key}`).then(r => r.json())
+          safeFetchJson(`${baseUrl}?function=GLOBAL_QUOTE&symbol=${sym}&apikey=${key}`),
+          safeFetchJson(`${baseUrl}?function=OVERVIEW&symbol=${sym}&apikey=${key}`),
+          safeFetchJson(`${baseUrl}?function=CASH_FLOW&symbol=${sym}&apikey=${key}`),
+          safeFetchJson(`${baseUrl}?function=BALANCE_SHEET&symbol=${sym}&apikey=${key}`)
         ]);
 
-        // Detect Alpha Vantage API rate limit or error message
-        const rateLimitMsg = quoteRes.Note || quoteRes.Information || overviewRes.Note || cashFlowRes.Note;
+        const rateLimitMsg = quoteRes.Note || quoteRes.Information || overviewRes.Note || cashFlowRes.Note || balanceRes.Note;
         if (rateLimitMsg) {
-          throw new Error('Alpha Vantage rate limit reached (5 calls/min or 25/day). Using cached/demo data if available.');
+          throw new Error('Alpha Vantage rate limit reached.');
         }
 
         const quote = quoteRes['Global Quote'] || {};
         const price = parseFloat(quote['05. price']);
-        const changePercent = parseFloat((quote['10. change percent'] || '0').replace('%', '')) || 0;
+        const changePercent = parseFloat(String(quote['10. change percent'] || '0').replace('%', '')) || 0;
 
-        if (!price || isNaN(price)) {
-          throw new Error(`No live quote returned for "${querySymbol}". Check ticker format (e.g. NVDA, VOD.LON).`);
+        if (!price || isNaN(price) || price <= 0) {
+          throw new Error(`No live quote returned for "${querySymbol}".`);
         }
 
-        // Latest Annual Cash Flow Report
         const annualCF = (cashFlowRes.annualReports && cashFlowRes.annualReports[0]) || {};
         const quarterlyCF = (cashFlowRes.quarterlyReports && cashFlowRes.quarterlyReports.slice(0, 4)) || [];
 
@@ -1121,7 +1140,6 @@
         let capex = Math.abs(parseFloat(annualCF.capitalExpenditures));
         let sbc = parseFloat(annualCF.stockBasedCompensation);
 
-        // Fallback to TTM sum from quarterly reports if annual is missing
         if (isNaN(ocf) && quarterlyCF.length > 0) {
           ocf = quarterlyCF.reduce((acc, q) => acc + (parseFloat(q.operatingCashflow) || 0), 0);
         }
@@ -1136,7 +1154,6 @@
         capex = isNaN(capex) ? 0 : capex;
         const startingFCF = ocf - capex;
 
-        // Latest Balance Sheet (prefer most recent quarterly, fallback to annual)
         const latestBS = (balanceRes.quarterlyReports && balanceRes.quarterlyReports[0]) ||
                          (balanceRes.annualReports && balanceRes.annualReports[0]) || {};
 
@@ -1152,7 +1169,6 @@
           totalDebt = stDebt + ltDebt;
         }
 
-        // Shares Outstanding
         let shares = parseFloat(overviewRes.SharesOutstanding);
         if (isNaN(shares) || shares <= 0) {
           shares = parseFloat(latestBS.commonStockSharesOutstanding) || 1;
@@ -1160,9 +1176,9 @@
 
         const companyData = {
           symbol: querySymbol,
-          exchange: overviewRes.Exchange || displayExchange,
-          name: overviewRes.Name || querySymbol,
-          currency: overviewRes.Currency || 'USD',
+          exchange: (overviewRes.Exchange && overviewRes.Exchange !== 'None') ? overviewRes.Exchange : displayExchange,
+          name: (overviewRes.Name && overviewRes.Name !== 'None') ? overviewRes.Name : querySymbol,
+          currency: (overviewRes.Currency && overviewRes.Currency !== 'None') ? overviewRes.Currency : 'USD',
           price,
           changePercent,
           operatingCashFlow: ocf,
@@ -1181,12 +1197,12 @@
 
       } catch (err) {
         console.error('Alpha Vantage Fetch Error:', err);
-        const fallback = getCachedCompany(querySymbol) || DEMO_DATABASE[querySymbol];
+        const fallback = getCachedCompany(querySymbol) || (DEMO_DATABASE[querySymbol] ? { ...DEMO_DATABASE[querySymbol], updatedAt: Date.now() } : null);
         if (fallback) {
-          showToast(`${err.message} Loaded cached data.`, 'warning');
+          showToast(`${err.message} Loaded fallback data for ${querySymbol}.`, 'warning');
           return fallback;
         }
-        showToast(err.message || 'Failed to fetch live ticker data.', 'error');
+        showToast(err.message || `Failed to fetch live ticker data for ${querySymbol}.`, 'error');
         return null;
       }
     }
@@ -1322,12 +1338,10 @@
       const dcf = calculateDCF(c, appState.assumptions);
       const currSym = getCurrencySymbol(c.currency);
 
-      // Company Identity
       document.getElementById('display-symbol').textContent = c.symbol;
       document.getElementById('display-exchange').textContent = c.exchange || 'EQUITY';
       document.getElementById('display-company-name').textContent = `${c.name} • ${c.currency || 'USD'}`;
 
-      // Hero KPIs (B10, B12, C10, D10, E10)
       document.getElementById('kpi-intrinsic').textContent = formatPrice(dcf.intrinsicValue, currSym);
       document.getElementById('kpi-target-buy').textContent = formatPrice(dcf.targetBuyPrice, currSym);
       document.getElementById('kpi-mos-sub').textContent = `${appState.assumptions.mos.toFixed(1)}% Margin of Safety`;
@@ -1338,7 +1352,6 @@
       chgEl.textContent = `${chgSign}${(c.changePercent || 0).toFixed(2)}% Today • ${c.source}`;
       chgEl.className = `text-[10px] mt-0.5 tabular-nums ${c.changePercent >= 0 ? 'text-gainGreen' : 'text-lossRed'}`;
 
-      // Upside / Downside (D10)
       const upsideEl = document.getElementById('kpi-upside');
       const upsideSign = dcf.upsidePct >= 0 ? '+' : '';
       upsideEl.textContent = `${upsideSign}${dcf.upsidePct.toFixed(2)}%`;
@@ -1347,7 +1360,6 @@
       const dollarSign = dcf.upsideDollar >= 0 ? '+' : '-';
       document.getElementById('kpi-upside-dollar').textContent = `${dollarSign}${formatPrice(Math.abs(dcf.upsideDollar), currSym)} vs Intrinsic`;
 
-      // Current Price vs FMP (E10)
       document.getElementById('kpi-price-vs-fmp').textContent = `${dcf.priceVsFmpPct.toFixed(1)}%`;
       const spreadEl = document.getElementById('kpi-fmp-spread');
       if (dcf.fmpSpreadPct <= 0) {
@@ -1358,7 +1370,6 @@
         spreadEl.className = 'text-[10px] text-lossRed mt-0.5 tabular-nums font-medium';
       }
 
-      // Valuation Status Pill
       const badgeEl = document.getElementById('valuation-badge');
       if (dcf.intrinsicValue <= 0) {
         badgeEl.textContent = 'Negative FCF';
@@ -1374,7 +1385,6 @@
         badgeEl.className = 'px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase bg-lossRed/15 text-lossRed border border-lossRed/30 shrink-0';
       }
 
-      // Price Spectrum Bar
       document.getElementById('bar-target-label').textContent = formatPrice(dcf.targetBuyPrice, currSym);
       document.getElementById('bar-current-label').textContent = formatPrice(dcf.currentPrice, currSym);
       document.getElementById('bar-fmp-label').textContent = formatPrice(dcf.intrinsicValue, currSym);
@@ -1388,7 +1398,6 @@
       document.getElementById('bar-fmp-marker').style.left = `${fmpPos}%`;
       document.getElementById('bar-current-dot').style.left = `${currPos}%`;
 
-      // SBC Impact Caption
       const sbcCaption = document.getElementById('sbc-impact-caption');
       if (appState.assumptions.deductSBC) {
         sbcCaption.innerHTML = `FCF: ${formatCompact(dcf.startingFCF, currSym)} − SBC: ${formatCompact(dcf.sbc, currSym)} = <strong class="text-white">${formatCompact(dcf.adjustedFCF, currSym)}</strong>`;
@@ -1396,7 +1405,6 @@
         sbcCaption.innerHTML = `Full FCF: <strong class="text-white">${formatCompact(dcf.startingFCF, currSym)}</strong> (SBC ${formatCompact(dcf.sbc, currSym)} ignored)`;
       }
 
-      // Breakdown Drawer Values
       document.getElementById('bd-ocf').textContent = formatCompact(c.operatingCashFlow, currSym);
       document.getElementById('bd-capex').textContent = formatCompact(c.capitalExpenditures, currSym);
       document.getElementById('bd-fcf').textContent = formatCompact(dcf.startingFCF, currSym);
@@ -1572,7 +1580,6 @@
         return `
           <div class="bg-surface border border-borderSubtle hover:border-zinc-700 rounded-2xl px-3 py-2.5 transition relative">
             <div class="flex items-center justify-between gap-2">
-              <!-- Tapping main body opens in DCF Analyzer -->
               <div onclick="loadWatchlistSlotIntoAnalyzer(${idx})" class="flex-1 min-w-0 cursor-pointer">
                 <div class="flex items-center gap-1.5">
                   <span class="text-sm font-extrabold text-white tracking-tight">${company.symbol}</span>
@@ -1581,7 +1588,6 @@
                 <p class="text-[10px] text-zinc-400 truncate">${company.name}</p>
               </div>
 
-              <!-- Price + Edit Button -->
               <div class="flex items-center gap-2 shrink-0">
                 <div onclick="loadWatchlistSlotIntoAnalyzer(${idx})" class="text-right cursor-pointer leading-tight">
                   <div class="text-xs font-bold text-white tabular-nums">${formatPrice(dcf.currentPrice, currSym)}</div>
@@ -1595,7 +1601,6 @@
               </div>
             </div>
 
-            <!-- Compact Column I–O Financial Metrics Strip -->
             <div onclick="loadWatchlistSlotIntoAnalyzer(${idx})" class="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-borderSubtle/70 text-[11px] tabular-nums cursor-pointer">
               <div>
                 <span class="text-[9px] text-zinc-500 block leading-none">Intrinsic (B10)</span>
@@ -1619,7 +1624,6 @@
       const slot = appState.watchlist[idx];
       if (!slot || !slot.ticker) return;
 
-      // Apply slot's custom DCF assumptions
       appState.assumptions = {
         deductSBC: slot.deductSBC,
         mos: slot.mos,
@@ -1659,7 +1663,6 @@
         await fetchCompanyData(slot.ticker, true);
         renderWatchlist();
 
-        // Pace requests if using live Alpha Vantage API to respect per-minute rate limits
         if (appState.apiKey && i < appState.watchlist.length - 1) {
           await new Promise(res => setTimeout(res, 1500));
         }
@@ -1737,11 +1740,11 @@
 
     function clearCachedData() {
       localStorage.removeItem(STORAGE_KEYS.CACHE);
+      localStorage.removeItem('intrinsicgauge_ticker_cache_v1');
       closeSettingsModal();
       showToast('IntrinsicGauge local ticker cache cleared', 'info');
     }
 
-    // Watchlist Slot Modal (Edit or Push Current Stock)
     function openSlotModal(index) {
       document.getElementById('slot-modal-title').textContent = `Edit Tracked Slot #${index + 1}`;
       document.getElementById('slot-select-dropdown').value = String(index);
@@ -1751,7 +1754,6 @@
 
     function openSaveToWatchlistModal() {
       if (!appState.currentCompany) return;
-      // Pick first empty slot or default to slot 0
       let targetIdx = appState.watchlist.findIndex(s => !s || !s.ticker);
       if (targetIdx === -1) targetIdx = 0;
 
@@ -1769,7 +1771,6 @@
 
     function onSlotDropdownChange(val) {
       const idx = parseInt(val, 10);
-      // Only overwrite fields if user is editing from Watchlist tab
       if (appState.activeTab === 'watchlist') {
         populateSlotModalFields(idx);
       }
